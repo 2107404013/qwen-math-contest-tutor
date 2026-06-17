@@ -1,274 +1,261 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Evaluator utilities for NumberTheory-Qwen.
+
+Primary scorer: Math-Verify final-answer equivalence.
+Fallback scorers: normalization, list-answer matching, equation RHS extraction,
+and simple SymPy equivalence.
+
+Main metric: Final Answer Accuracy.
+Auxiliary metrics: Boxed Answer Rate, Extraction Success Rate, and Error Type Distribution.
+"""
+
 import argparse
 import json
 import re
-from collections import defaultdict
+import unicodedata
 from pathlib import Path
 
-import yaml
-import torch
-from sympy import simplify
-from sympy.parsing.sympy_parser import parse_expr
-from transformers import AutoModelForCausalLM, AutoTokenizer
+try:
+    from math_verify import parse, verify
 
+    MATH_VERIFY_AVAILABLE = True
+except Exception:
+    parse = None
+    verify = None
+    MATH_VERIFY_AVAILABLE = False
 
-def load_jsonl(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+try:
+    import sympy as sp
+except Exception:
+    sp = None
 
 
 def extract_boxed_answer(text):
+    if not text:
+        return None
     matches = re.findall(r"\\boxed\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", text)
-    if matches:
-        return matches[-1].strip()
+    return matches[-1].strip() if matches else None
+
+
+def extract_answer_candidates(text):
+    if not text:
+        return []
+
+    candidates = []
+    boxed = extract_boxed_answer(text)
+    if boxed:
+        candidates.append(boxed)
 
     patterns = [
-        r"最终答案[:：]\s*([^\n。]+)",
-        r"答案[:：]\s*([^\n。]+)",
-        r"所以.*?为\s*([^\n。]+)",
+        r"最终答案(?:是|为)?[:：]?\s*([^\n。；;]+)",
+        r"答案(?:是|为)?[:：]?\s*([^\n。；;]+)",
+        r"因此[:：]?\s*([^\n。；;]+)",
+        r"所以[:：]?\s*([^\n。；;]+)",
     ]
     for pattern in patterns:
-        found = re.findall(pattern, text)
-        if found:
-            return found[-1].strip()
-    return ""
+        candidates.extend(item.strip() for item in re.findall(pattern, str(text)))
+
+    candidates.append(str(text).strip())
+
+    extra = []
+    for candidate in candidates:
+        if "=" in candidate:
+            extra.append(candidate.split("=")[-1].strip())
+    candidates.extend(extra)
+
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            deduped.append(candidate)
+            seen.add(candidate)
+    return deduped
+
+
+def latex_frac_to_slash(ans):
+    return re.sub(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}", r"\1/\2", ans)
 
 
 def normalize_answer(ans):
     if ans is None:
         return ""
-    ans = str(ans).strip().lower()
-    replacements = {
-        "，": ",", "。": "", "；": ";", "：": ":",
-        "（": "(", "）": ")", "×": "*", "·": "*",
-        "\\cdot": "*", "\\times": "*", "−": "-",
-        "\\left": "", "\\right": "", "\\,": "",
-        "$": "", " ": "", "\n": "",
-    }
-    for old, new in replacements.items():
-        ans = ans.replace(old, new)
+
+    ans = unicodedata.normalize("NFKC", str(ans))
+    ans = latex_frac_to_slash(ans)
+    ans = ans.strip()
+
+    ans = ans.replace("$", "")
+    ans = ans.replace("\\left", "").replace("\\right", "")
+    ans = ans.replace("\\,", "").replace("\\;", "").replace("\\!", "")
+    ans = re.sub(r"\\text\s*\{([^{}]*)\}", r"\1", ans)
+
+    ans = ans.replace("，", ",").replace("；", ",").replace("、", ",")
+    ans = ans.replace("。", "").replace(".", "")
+    ans = ans.replace(" 或 ", ",").replace(" 和 ", ",")
+    ans = ans.replace("或", ",").replace("和", ",")
+
+    ans = re.sub(r"\b[a-zA-Z]\s*=", "", ans)
     ans = ans.replace("{", "").replace("}", "")
+    ans = ans.replace(" ", "")
+    ans = ans.strip(",;:：")
     return ans
 
 
-def split_items(ans):
-    ans = normalize_answer(ans)
-    if not ans:
-        return []
-    return [x for x in re.split(r"[,;，；、]", ans) if x]
+def split_list_answer(ans):
+    norm = normalize_answer(ans)
+    if "," not in norm:
+        return None
+    parts = [part for part in norm.split(",") if part]
+    return sorted(parts) if parts else None
 
 
-def sympy_equal(a, b):
+def verify_with_math_verify(pred, gold):
+    if not MATH_VERIFY_AVAILABLE:
+        return False, "math_verify_unavailable"
     try:
-        a = normalize_answer(a).replace("^", "**")
-        b = normalize_answer(b).replace("^", "**")
-        return simplify(parse_expr(a) - parse_expr(b)) == 0
+        return bool(verify(parse(gold), parse(pred))), "math_verify"
+    except Exception as exc:
+        return False, f"math_verify_error:{type(exc).__name__}"
+
+
+def sympy_equiv(pred, gold):
+    if sp is None:
+        return False
+    try:
+        pred_expr = normalize_answer(pred).replace("^", "**")
+        gold_expr = normalize_answer(gold).replace("^", "**")
+        return bool(sp.simplify(sp.sympify(pred_expr) - sp.sympify(gold_expr)) == 0)
     except Exception:
         return False
 
 
 def is_equiv(pred, gold):
-    pred_n = normalize_answer(pred)
-    gold_n = normalize_answer(gold)
-    if pred_n == gold_n:
-        return True
+    candidates = extract_answer_candidates(pred)
+    gold_norm = normalize_answer(gold)
 
-    pred_items = split_items(pred)
-    gold_items = split_items(gold)
-    if pred_items and gold_items and sorted(pred_items) == sorted(gold_items):
-        return True
+    for candidate in candidates:
+        candidate_norm = normalize_answer(candidate)
 
-    if sympy_equal(pred, gold):
-        return True
+        ok, method = verify_with_math_verify(candidate, gold)
+        if ok:
+            return True, method, candidate, candidate_norm, gold_norm
 
-    if pred_items and gold_items and len(pred_items) == len(gold_items):
-        used = [False] * len(gold_items)
-        for p in pred_items:
-            ok = False
-            for i, g in enumerate(gold_items):
-                if not used[i] and (normalize_answer(p) == normalize_answer(g) or sympy_equal(p, g)):
-                    used[i] = True
-                    ok = True
-                    break
-            if not ok:
-                return False
-        return True
+        if candidate_norm == gold_norm:
+            return True, "normalized_exact", candidate, candidate_norm, gold_norm
 
-    return False
+        pred_list = split_list_answer(candidate)
+        gold_list = split_list_answer(gold)
+        if pred_list is not None and gold_list is not None and pred_list == gold_list:
+            return True, "list_equiv", candidate, candidate_norm, gold_norm
+
+        if "=" in candidate:
+            rhs = candidate.split("=")[-1].strip()
+            rhs_norm = normalize_answer(rhs)
+            if rhs_norm == gold_norm:
+                return True, "equation_rhs", rhs, rhs_norm, gold_norm
+
+        if sympy_equiv(candidate, gold):
+            return True, "sympy_equiv", candidate, candidate_norm, gold_norm
+
+    raw = candidates[0] if candidates else ""
+    return False, "no_match", raw, normalize_answer(raw), gold_norm
 
 
-def build_prompt(tokenizer, template, problem):
-    user_prompt = template.replace("{problem}", problem)
-    messages = [
-        {"role": "system", "content": "你是一名严谨的高中数学竞赛辅导老师，擅长代数与数论。"},
-        {"role": "user", "content": user_prompt},
+def classify_gold_answer(problem, gold):
+    if not gold or not str(gold).strip():
+        return "empty_answer"
+
+    text = f"{problem}\n{gold}".lower()
+    if any(key in text for key in ["image", "diagram", "figure", "如图", "图片"]):
+        return "possible_image_problem"
+    if any(key in text for key in ["prove", "proof", "show that", "证明"]):
+        return "possible_proof"
+    if len(str(gold)) > 120:
+        return "long_solution_like_answer"
+    if any(key in str(gold).lower() for key in ["open", "not unique", "不唯一", "无法确定"]):
+        return "unsupported_format"
+
+    return "short_answer"
+
+
+def classify_eval_case(pred, gold, model_output="", problem=""):
+    gold_type = classify_gold_answer(problem, gold)
+    if gold_type != "short_answer":
+        return "unsuitable_for_rule_eval"
+
+    ok, _, _, _, _ = is_equiv(pred, gold)
+    if ok:
+        return "correct"
+
+    if model_output and "\\boxed" not in model_output:
+        return "format_error"
+
+    return "model_error"
+
+
+def run_evaluator_tests():
+    tests = [
+        {"pred": "2 和 3", "gold": "2,3", "expected": True},
+        {"pred": "{2,3}", "gold": "2,3", "expected": True},
+        {"pred": "x=2 或 x=3", "gold": "2,3", "expected": True},
+        {"pred": r"\frac{1}{2}", "gold": "1/2", "expected": True},
+        {"pred": "0.5", "gold": "1/2", "expected": True},
+        {"pred": "x^3+y^3+z^3=3xyz", "gold": "3xyz", "expected": True},
+        {"pred": "1", "gold": "6", "expected": False},
+        {"pred": "12", "gold": "12", "expected": True},
+        {"pred": "-1", "gold": "1", "expected": False},
+        {"pred": "n is even", "gold": "偶数", "expected": False},
     ]
-    try:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    except Exception:
-        return user_prompt
 
+    results = []
+    all_passed = True
 
-def summarize(results):
-    by_subject = defaultdict(lambda: {"total": 0, "correct": 0})
-    correct = 0
+    for idx, item in enumerate(tests, 1):
+        got, method, raw_pred, norm_pred, norm_gold = is_equiv(item["pred"], item["gold"])
+        passed = got == item["expected"]
+        all_passed = all_passed and passed
+        results.append(
+            {
+                "id": idx,
+                "pred": item["pred"],
+                "gold": item["gold"],
+                "expected": item["expected"],
+                "got": got,
+                "passed": passed,
+                "match_method": method,
+                "raw_pred_answer": raw_pred,
+                "normalized_pred": norm_pred,
+                "normalized_gold": norm_gold,
+            }
+        )
 
-    for row in results:
-        subject = row["subject"]
-        by_subject[subject]["total"] += 1
-        if row["is_correct"]:
-            correct += 1
-            by_subject[subject]["correct"] += 1
-
-    total = len(results)
-
-    def acc(c, t):
-        return round(c / t, 4) if t else 0.0
-
-    return {
-        "total": total,
-        "correct": correct,
-        "accuracy": acc(correct, total),
-        "algebra_total": by_subject["algebra"]["total"],
-        "algebra_correct": by_subject["algebra"]["correct"],
-        "algebra_accuracy": acc(by_subject["algebra"]["correct"], by_subject["algebra"]["total"]),
-        "number_theory_total": by_subject["number_theory"]["total"],
-        "number_theory_correct": by_subject["number_theory"]["correct"],
-        "number_theory_accuracy": acc(by_subject["number_theory"]["correct"], by_subject["number_theory"]["total"]),
+    output = {
+        "math_verify_available": MATH_VERIFY_AVAILABLE,
+        "all_passed": all_passed,
+        "tests": results,
     }
 
-
-def classify_error(row):
-    if not row.get("pred_answer"):
-        return "最终答案格式错误"
-    if len(row.get("model_output", "")) > 1800:
-        return "推理过程过长或跑偏"
-    if row["subject"] == "algebra":
-        return "代数变形错误"
-    return "数论同余/整除错误"
-
-
-def write_error_analysis(results, summary, path):
-    wrong = [r for r in results if not r["is_correct"]]
-    groups = defaultdict(int)
-    for row in wrong:
-        groups[classify_error(row)] += 1
-
-    cases = wrong[:5]
-    lines = [
-        "# Baseline Error Analysis",
-        "",
-        "## Summary",
-        "",
-        f"- Total: {summary['total']}",
-        f"- Correct: {summary['correct']}",
-        f"- Accuracy: {summary['accuracy']}",
-        f"- Algebra accuracy: {summary['algebra_accuracy']}",
-        f"- Number theory accuracy: {summary['number_theory_accuracy']}",
-        "",
-        "## Main Error Types",
-        "",
-        f"- 代数变形错误: {groups['代数变形错误']}",
-        f"- 数论同余/整除错误: {groups['数论同余/整除错误']}",
-        f"- 最终答案格式错误: {groups['最终答案格式错误']}",
-        f"- 推理过程过长或跑偏: {groups['推理过程过长或跑偏']}",
-        "",
-        "## Typical Error Cases",
-        "",
-    ]
-
-    if not cases:
-        lines.append("No wrong cases found in this small baseline run.")
-    else:
-        for idx, row in enumerate(cases, 1):
-            lines.extend([
-                f"### Case {idx}: {row['id']}",
-                "",
-                f"- Subject: {row['subject']}",
-                f"- Problem: {row['problem']}",
-                f"- Gold answer: `{row['gold_answer']}`",
-                f"- Pred answer: `{row.get('pred_answer', '')}`",
-                f"- Possible reason: {classify_error(row)}",
-                "",
-            ])
-
-    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path("results").mkdir(exist_ok=True)
+    Path("results/evaluator_test.json").write_text(
+        json.dumps(output, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/baseline_eval.yaml")
+    parser.add_argument("--test_evaluator", action="store_true")
     args = parser.parse_args()
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    if args.test_evaluator:
+        run_evaluator_tests()
+        return
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is not available. Please run on the remote RTX4090 server.")
-
-    samples = load_jsonl(cfg["eval_file"])
-    target_subjects = set(cfg.get("target_subjects", []))
-    if target_subjects:
-        samples = [x for x in samples if x["subject"] in target_subjects]
-    samples = samples[: int(cfg.get("max_eval_samples", len(samples)))]
-
-    model_name = cfg["model_name"]
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-        low_cpu_mem_usage=True,
-    )
-    model.eval()
-
-    results = []
-    for i, item in enumerate(samples, 1):
-        print(f"[{i}/{len(samples)}] {item['id']}")
-
-        prompt = build_prompt(tokenizer, cfg["prompt_template"], item["problem"])
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=int(cfg.get("max_new_tokens", 1024)),
-                do_sample=bool(cfg.get("do_sample", False)),
-                temperature=float(cfg.get("temperature", 0.0)) if cfg.get("do_sample", False) else None,
-                top_p=float(cfg.get("top_p", 1.0)),
-                pad_token_id=tokenizer.eos_token_id,
-            )
-
-        generated = outputs[0][inputs["input_ids"].shape[-1]:]
-        model_output = tokenizer.decode(generated, skip_special_tokens=True).strip()
-        pred = extract_boxed_answer(model_output)
-        correct = is_equiv(pred, item["answer"])
-
-        results.append({
-            "id": item["id"],
-            "subject": item["subject"],
-            "problem": item["problem"],
-            "gold_answer": item["answer"],
-            "model_output": model_output,
-            "pred_answer": pred,
-            "is_correct": correct,
-        })
-
-    output_path = Path(cfg["output_path"])
-    summary_path = Path(cfg["summary_path"])
-    error_path = Path(cfg.get("error_analysis_path", "results/error_analysis.md"))
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    summary = summarize(results)
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_error_analysis(results, summary, error_path)
-
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print(f"Saved: {output_path}")
-    print(f"Saved: {summary_path}")
-    print(f"Saved: {error_path}")
+    raise SystemExit("Stage 2 only supports --test_evaluator. Model inference is disabled in this stage.")
 
 
 if __name__ == "__main__":

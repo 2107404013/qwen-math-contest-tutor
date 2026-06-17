@@ -1,24 +1,16 @@
 model_name: Qwen/Qwen2.5-Math-1.5B-Instruct
+eval_file: data/processed/public_number_theory_eval.jsonl
+output_path: results/number_theory_baseline_eval.json
+summary_path: results/number_theory_baseline_summary.json
+error_analysis_path: results/number_theory_baseline_error_analysis.md
 
-# data/processed/eval_small.jsonl 是 smoke test，用于快速检查流程。
-# data/processed/challenge_eval_small.jsonl 是正式 baseline，用于后续 LoRA、蒸馏、GRPO 对比。
-eval_file: data/processed/challenge_eval_small.jsonl
-
-output_path: results/baseline_eval.json
-summary_path: results/baseline_summary.json
-error_analysis_path: results/error_analysis.md
-
-max_eval_samples: 80
-max_new_tokens: 1024
+max_eval_samples: 200
+max_new_tokens: 2048
 temperature: 0.0
 top_p: 1.0
 do_sample: false
 
-target_subjects:
-  - algebra
-  - number_theory
-
 prompt_template: |
-  你是一名高中数学竞赛教练。请一步步推理下面的题目，并将最终答案写在 \boxed{} 中。
+  你是一名高中数学竞赛数论教练。请一步步推理下面的数论题，并将最终答案写在 \boxed{} 中。
 
   题目：{problem}

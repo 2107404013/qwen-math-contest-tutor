@@ -4,7 +4,7 @@ NumberTheory-Qwen：面向高中竞赛数论题的轻量级数学问答助手。
 
 ## 项目目标
 
-基于 `Qwen/Qwen2.5-Math-1.5B-Instruct`，构建专注高中竞赛数论方向的数学问答助手。训练路线为 Formal Baseline → LoRA SFT → Teacher Response Distillation → GRPO → Optional Logit Distillation。
+基于 `Qwen/Qwen2.5-Math-1.5B-Instruct`，构建专注高中竞赛数论方向的数学问答助手。项目路线为 Formal Baseline -> LoRA SFT -> Teacher Response Distillation -> GRPO -> Optional Logit Distillation。
 
 ## 模型选择
 
@@ -51,11 +51,33 @@ NumberTheory-Qwen：面向高中竞赛数论题的轻量级数学问答助手。
 
 ## Scoring Protocol
 
-主指标是 Final Answer Accuracy。
+本阶段不训练模型、不运行模型推理、不下载 Qwen 模型权重，只完成评分协议和公开数据集字段检查。
 
-评分标准以 Math-Verify final-answer equivalence 为主，自定义 normalize、列表答案判断、分数/小数处理、等式右侧提取和 SymPy 等价判断作为 fallback。
+正式评分协议：
 
-辅助指标包括 Boxed Answer Rate、Extraction Success Rate、Error Type Distribution。
+- 主指标：Final Answer Accuracy；
+- 主评分器：Math-Verify final-answer equivalence；
+- fallback：字符串归一化、列表答案判断、分数/小数等价、等式右侧提取、简单 SymPy 等价；
+- 辅助指标：Boxed Answer Rate、Extraction Success Rate、Error Type Distribution；
+- 证明题、图片题、开放题和长解答题暂时标记为 `unsuitable_for_rule_eval`，不进入主评测。
+
+公开数据集检查对象：
+
+- Omni-MATH-Rule / Omni-MATH：候选正式数论评测来源；
+- NuminaMath-1.5：候选数论 SFT 训练来源；
+- NuminaMath-CoT：备用训练来源。
+
+## 文件结构
+
+```text
+configs/      配置文件
+scripts/      数据处理、评测、训练和 demo 脚本
+data/         数据说明；raw 和 processed 不上传 Git
+results/      小规模结果和分析文件
+outputs/      本地训练输出，不上传 Git
+checkpoints/  本地 checkpoint，不上传 Git
+models/       本地模型权重，不上传 Git
+```
 
 ## 大文件规则
 
