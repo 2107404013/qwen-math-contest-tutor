@@ -1,0 +1,11 @@
+{
+  "total": 30,
+  "correct": 27,
+  "accuracy": 0.9,
+  "algebra_total": 15,
+  "algebra_correct": 13,
+  "algebra_accuracy": 0.8667,
+  "number_theory_total": 15,
+  "number_theory_correct": 14,
+  "number_theory_accuracy": 0.9333
+}

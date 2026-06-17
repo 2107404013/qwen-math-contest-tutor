@@ -52,3 +52,29 @@ Qwen-Math-Contest-Tutor/
 Do not upload model weights, checkpoints, raw datasets, processed datasets, Hugging Face cache files, or wandb artifacts to GitHub.
 
 Training outputs should stay local under directories such as `outputs/`, `checkpoints/`, or `models/`. These paths are ignored by Git.
+
+## Baseline Evaluation
+
+本阶段评测原始 Qwen2.5-Math-1.5B-Instruct 在高中竞赛代数和数论小测试集上的表现，作为后续 LoRA SFT、教师蒸馏和 GRPO 的对比基线。
+
+评测重点包括：
+- answer accuracy
+- boxed answer accuracy
+- algebra accuracy
+- number theory accuracy
+- error analysis
+
+首次 baseline 使用 `data/processed/eval_small.jsonl` 小规模样例集跑通流程，实际运行后会更新 `results/baseline_summary.json` 和 `results/error_analysis.md`。
+
+## Stage 2：数据准备
+
+本阶段构建高中竞赛代数与数论方向的 SFT 数据格式，输出训练集和验证集 jsonl 文件。每条样本包含题目、短答案、完整推理答案，以及可直接用于 chat-style SFT 的 `messages` 字段。
+
+当前版本先使用小规模手工 seed 数据验证流程，后续会继续接入 NuminaMath、OlympiadBench 或自建竞赛题库，并筛选 algebra 与 number_theory 样本。
+
+数据输出位于：
+
+- `data/processed/sft_train.jsonl`
+- `data/processed/sft_val.jsonl`
+
+这些文件不提交到 GitHub，只在服务器本地保存。

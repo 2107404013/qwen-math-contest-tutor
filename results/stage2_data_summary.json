@@ -1,0 +1,22 @@
+{
+  "stage": "Stage 2 - SFT data preparation",
+  "total": 12,
+  "train_total": 10,
+  "val_total": 2,
+  "subject_counts": {
+    "number_theory": 6,
+    "algebra": 6
+  },
+  "train_subject_counts": {
+    "number_theory": 5,
+    "algebra": 5
+  },
+  "val_subject_counts": {
+    "algebra": 1,
+    "number_theory": 1
+  },
+  "train_file": "data/processed/sft_train.jsonl",
+  "val_file": "data/processed/sft_val.jsonl",
+  "format": "jsonl with messages field",
+  "note": "当前是小规模手工 seed SFT 数据，用于验证 Stage 3 LoRA SFT 流程。"
+}

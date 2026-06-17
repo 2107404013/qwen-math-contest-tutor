@@ -1,0 +1,14 @@
+stage: 2
+seed: 42
+train_ratio: 0.85
+
+target_subjects:
+  - algebra
+  - number_theory
+
+output_train_file: data/processed/sft_train.jsonl
+output_val_file: data/processed/sft_val.jsonl
+summary_path: results/stage2_data_summary.json
+report_path: results/stage2_data_report.md
+
+system_prompt: 你是一名严谨的高中数学竞赛辅导老师，擅长代数与数论。请给出清晰推理，并将最终答案写在 \boxed{} 中。
