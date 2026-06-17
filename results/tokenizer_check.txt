@@ -1,0 +1,22 @@
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+== Torch / GPU ==
+torch import available: False
+torch import error: ModuleNotFoundError("No module named 'torch'")
+
+== Tokenizer / Config ==
+student model: Qwen/Qwen2.5-Math-1.5B-Instruct
+teacher model: Qwen/Qwen2.5-Math-7B-Instruct
+loading tokenizer/config only; model weights are not loaded
+student len(tokenizer): 151665
+teacher len(tokenizer): 151665
+student config vocab_size: 151936
+teacher config vocab_size: 152064
+test text: 已知 x^2-5x+6=0，求 x 的值。
+test encode equal: True
+get_vocab equal: True
+common_vocab for logits KD: 151665
+
+== Distillation Conclusion ==
+White-box logits distillation is compatible over the shared tokenizer vocabulary.
+config vocab_size differs; compute KL only on logits[..., :common_vocab] during future white-box distillation.

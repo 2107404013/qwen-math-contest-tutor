@@ -1,0 +1,17 @@
+data/raw/
+data/processed/
+outputs/
+checkpoints/
+models/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+wandb/
+.cache/
+__pycache__/
+**/__pycache__/
+.env
+.venv/
+venv/
